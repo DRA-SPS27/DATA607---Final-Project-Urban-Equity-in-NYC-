@@ -1,0 +1,223 @@
+---
+title: "Final Project: Urban Equity in NYC"
+author: "Denise Atherley"
+format: html
+editor: visual
+---
+
+## Approach - 
+
+For my final project I will be investigating the relationship between urban infrastructure investments, like public transit access and green spaces, and the demographic makeup of different city districts. Just in my observation of the makeup of the city, I have always believed that wealthier districts receive higher investments in infrastructure and I am hoping that there can be data to support this claim. In order to accomplish this I will be leveraging the OSMEN data science workflow. I will obtain publicly available data from two distinct sources and scrub it to be able to better explore it and interpret it. I will generate visuals that use the sf package, which integrated perfectly with the Tidyverse. That is the primary package I will be using for this project.
+
+### Data Sources:
+
+I first attempted to get a breakdown of demographics and income level by city council district but struggled to find a data source that contained all of the necessary information. Eventually, I found a dataset available on the data.cccnewyork.org website for "[Median Incomes in NYC](https://data.cccnewyork.org/data/map/66/median-incomes#66/39/3/107/131/a/a)". Based on the site, the data was last updated in 2023. I was able to select the indicators I wanted to include and it produced distinct data files. For this analysis I focused specifically on the median income levels for the various neighborhoods in New York City. Using the median as the measure for income will serve as a better reflection of typical incomes in a group rather than average income because of income inequality.
+
+The second data set I found was available on the data.ny.gov website for the latest "[MTA Subway Stations](https://data.ny.gov/Transportation/MTA-Subway-Stations/39hk-dx4f/about_data)". I will pull this data dynamically as a GeoJSON using the sf package.
+
+## Data Transformation - 
+
+I fetched the MTA subway data directly from the Open data website.
+
+```{r}
+library(sf)
+
+# The Socrata API endpoint for GeoJSON
+mta_url <- "https://data.ny.gov/resource/39hk-dx4f.geojson"
+
+# Read directly into a spatial object
+subway_stations <- st_read(mta_url)
+
+# View the spatial points
+plot(st_geometry(subway_stations))
+```
+
+The median income by NYC neighborhood was a bit trickier to manage because it was unstructured, with descriptive text on top and variables named incorrectly as well as some blank values. This required more tidying to produce a structured data frame where every single unique row is a New York City neighborhood and the columns are the numeric median incomes for All Households, Families, Families with Children and Families without Children.
+
+```{r}
+library(tidyverse)
+library(janitor)
+
+# 1. IMPORT
+url <- "https://raw.githubusercontent.com/DRA-SPS27/DATA607---Final-Project-Urban-Equity-in-NYC-/main/Median%20Incomes.csv"
+
+# skip = 5 bypasses the descriptive text at the top of the file
+# na = c(...) tells R to treat the "#VALUE!" strings as missing data (NA)
+raw_incomes <- read_csv(url, 
+                        skip = 5, 
+                        na = c("", "NA", "#VALUE!"))
+
+# 2. TIDY, FILTER & TRANSFORM
+clean_incomes_2023 <- raw_incomes %>%
+  
+  # Standardize the initial headers (e.g., "Household Type" becomes "household_type")
+  clean_names() %>%
+  
+  # Filter the dataset down to just the year 2023
+  filter(time_frame == 2023) %>%
+  
+  # Remove the 'data_format' column because it is completely redundant (every row says "Dollars")
+  # Remove 'time_frame' as well since the whole dataset is now 2023
+  select(-data_format, -time_frame) %>%
+  
+  # Pivot from long to wide: each household type becomes its own column
+  # This makes it so there is only one row per Location
+  pivot_wider(
+    names_from = household_type,
+    values_from = data
+  ) %>%
+  
+  # Run clean_names() one more time to standardize the newly created columns
+  # (e.g., "Families with Children" becomes "families_with_children")
+  clean_names()
+
+# View your final, clean 2023 dataset!
+head(clean_incomes_2023)
+```
+
+To connect this tidy income data to the MTA subway data, I created a bridge. The location column in the median income data set along with the fips codes actually represent NYC Community Districts and because the MTA data is just a bunch of coordinates, I needed to pull the geographic shapes of these Community Districts to count how many subway points fall inside each one.
+
+```{r}
+library(scales) # For formatting currency on charts
+
+# 1. Load NYC Community District Boundaries (Polygons) from NYC Open Data
+cd_url <- "https://data.cityofnewyork.us/resource/5crt-au7u.geojson"
+cd_shapes <- st_read(cd_url)
+
+# 2. SPATIAL TRANSFORMATION: Count stations per district
+# st_intersects() checks which subway points fall inside which district polygons
+cd_shapes$station_count <- lengths(st_intersects(cd_shapes, subway_stations))
+
+# 3. JOIN THE DATA
+# The 'boro_cd' column in the spatial data matches the 'fips' column in your income data
+final_data <- clean_incomes_2023 %>%
+  mutate(fips = as.character(fips)) %>% # Ensure both are characters so they match perfectly
+  left_join(cd_shapes, by = c("fips" = "boro_cd")) %>%
+  st_as_sf() # Ensure the final joined dataset remains a spatial object
+```
+
+### Validation:
+
+Before running an analysis, I want to validate that my join worked and better understand my variables.
+
+```{r}
+# --- VALIDATION STATISTIC ---
+# Check the summary statistics of your two main variables to ensure no weird outliers
+summary(final_data$all_households) # Validating the Income column
+summary(final_data$station_count)  # Validating the spatial count
+
+# --- VALIDATION GRAPHIC ---
+# A histogram showing the distribution of subway stations across all districts
+ggplot(final_data, aes(x = station_count)) +
+  geom_histogram(binwidth = 3, fill = "steelblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Subway Stations per NYC Community District",
+       x = "Number of Subway Stations",
+       y = "Number of Districts")
+```
+
+I was able to verify that most districts have between 0 and 15 MTA stations.
+
+### Model & Interpret:
+
+To better answer my motive for this analysis, which is whether wealthier districts have disproportionately higher access to public transit, I generated a simple linear regression test to see if income predicts the number of stations.
+
+```{r}
+# --- CONCLUSION STATISTIC (Modeling) ---
+# A simple linear regression testing if Income predicts the Number of Stations
+model <- lm(station_count ~ all_households, data = final_data)
+
+# Print the model summary to get p-value and R-squared
+summary(model)
+
+# --- CONCLUSION GRAPHIC ---
+# A scatterplot with a statistical trend line
+ggplot(final_data, aes(x = all_households, y = station_count)) +
+  geom_point(alpha = 0.7, color = "darkblue", size = 3) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) + # Adds the linear trend line
+  scale_x_continuous(labels = label_dollar()) +          # Formats X-axis as currency
+  theme_minimal() +
+  labs(title = "Subway Access vs. Median Income in NYC",
+       subtitle = "Comparing station density against household wealth by Community District",
+       x = "Median Income (All Households)",
+       y = "Number of Subway Stations")
+```
+
+In addition to a scatter plot, I generated an interactive map of the subway stations based on income.
+
+```{r}
+# Install if you haven't already: install.packages("leaflet")
+library(leaflet)
+
+# 1. Transform Coordinates (Crucial Step!)
+# Leaflet requires all spatial data to be in the WGS84 coordinate reference system (EPSG:4326).
+final_data <- st_transform(final_data, 4326)
+subway_stations <- st_transform(subway_stations, 4326)
+
+# 2. Create a Color Palette
+# This maps the median income values to a color gradient (Yellow to Green to Blue)
+pal <- colorNumeric(
+  palette = "YlGnBu", 
+  domain = final_data$all_households,
+  na.color = "transparent" # Hides districts with missing income data
+)
+
+# 3. Build the Map
+equity_map <- leaflet() %>%
+  # Add a clean, light base map so our data stands out
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  
+  # Layer 1: The Community District Polygons (The Choropleth)
+  addPolygons(
+    data = final_data,
+    fillColor = ~pal(all_households),
+    weight = 1,              # Thickness of district borders
+    opacity = 1,
+    color = "white",         # Color of district borders
+    fillOpacity = 0.7,
+    
+    # Add a hover effect so the district highlights when the mouse is over it
+    highlightOptions = highlightOptions(
+      weight = 3,
+      color = "#666",
+      fillOpacity = 0.9,
+      bringToFront = FALSE   # Keep stations on top of the highlight
+    ),
+    
+    # Add a tooltip showing the district's exact data
+    label = ~paste0("District ", fips, 
+                    " | Income: $", formatC(all_households, format="f", big.mark=",", digits=0), 
+                    " | Stations: ", station_count)
+  ) %>%
+  
+  # Layer 2: The MTA Subway Stations (Points)
+  addCircleMarkers(
+    data = subway_stations,
+    radius = 2.5,            # Size of the dot
+    color = "#ff6347",       # Tomato red makes the stations pop against the blue/green map
+    stroke = FALSE,
+    fillOpacity = 0.9,
+    label = ~stop_name            # The MTA GeoJSON has a 'stop_name' column
+  ) %>%
+  
+  # Layer 3: The Legend
+  addLegend(
+    pal = pal,
+    values = final_data$all_households,
+    opacity = 0.7,
+    title = "Median Income (2023)",
+    position = "bottomright",
+    labFormat = labelFormat(prefix = "$")
+  )
+
+# 4. Display the Map
+equity_map
+```
+
+## Conclusion - 
+
+After running my linear regression model, the summary displayed a p-value of 0.0005787 for all households. Because this p-value is less than 0.05, I can confidently conclude that there is a statistically significant relationship between a district's wealth and its subway access. The line in my scatter plot goes slightly up and to the right which indicates that the wealthier neighborhoods have more stations. This affirms my initial assumption.
+
+Using the heatmap I produced, it is evident that lower Manhattan around the financial district holds the most wealth distribution, with a median income of over \$198K, and the most access to MTA subways, with district 101 alone having 23 stations. The Bronx holds the least wealth distribution, with a median income of less than \$31K in district 203 and 206 and only 2 subway stations.
+
+It is a very interesting analysis for me because my general experience is that folks who have lower income rely heavily on public transit to navigate their day to day. This disproportionate access to subways impacts the quality of life for individuals in these neighborhoods. They are much more limited in their ability to find alternative transportation methods due to income restrains. I would likely extend this analysis and see if I could find data on households with vehicles to compare further.
