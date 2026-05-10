@@ -1,11 +1,13 @@
 ---
 title: "Final Project: Urban Equity in NYC"
 author: "Denise Atherley"
-format: html
+format: 
+  html:
+    embed-resources: true
 editor: visual
 ---
 
-## Approach - 
+## Approach -
 
 For my final project I will be investigating the relationship between urban infrastructure investments, like public transit access and green spaces, and the demographic makeup of different city districts. Just in my observation of the makeup of the city, I have always believed that wealthier districts receive higher investments in infrastructure and I am hoping that there can be data to support this claim. In order to accomplish this I will be leveraging the OSMEN data science workflow. I will obtain publicly available data from two distinct sources and scrub it to be able to better explore it and interpret it. I will generate visuals that use the sf package, which integrated perfectly with the Tidyverse. That is the primary package I will be using for this project.
 
@@ -15,7 +17,7 @@ I first attempted to get a breakdown of demographics and income level by city co
 
 The second data set I found was available on the data.ny.gov website for the latest "[MTA Subway Stations](https://data.ny.gov/Transportation/MTA-Subway-Stations/39hk-dx4f/about_data)". I will pull this data dynamically as a GeoJSON using the sf package.
 
-## Data Transformation - 
+## Data Transformation -
 
 I fetched the MTA subway data directly from the Open data website.
 
@@ -214,7 +216,7 @@ equity_map <- leaflet() %>%
 equity_map
 ```
 
-## Conclusion - 
+## Conclusion -
 
 After running my linear regression model, the summary displayed a p-value of 0.0005787 for all households. Because this p-value is less than 0.05, I can confidently conclude that there is a statistically significant relationship between a district's wealth and its subway access. The line in my scatter plot goes slightly up and to the right which indicates that the wealthier neighborhoods have more stations. This affirms my initial assumption.
 
